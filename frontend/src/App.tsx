@@ -3,7 +3,7 @@ import { createSocket, createPeerConnection, PeerConnections } from './webrtc';
 import type { Socket } from 'socket.io-client';
 
 // TODO: change to your deployed backend URL later
-const BACKEND_URL = 'http://localhost:4000';
+const BACKEND_URL = 'http://192.168.1.158:4000';
 
 const App: React.FC = () => {
   const [roomId, setRoomId] = useState('');
