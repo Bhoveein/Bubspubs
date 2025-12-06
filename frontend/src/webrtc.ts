@@ -1,22 +1,19 @@
-// src/webrtc.ts
-import { io, Socket } from 'socket.io-client';
+import { io, Socket } from "socket.io-client";
 
 export type PeerConnections = {
   [socketId: string]: RTCPeerConnection;
 };
 
 const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' }, // Free Google STUN
+  { urls: "stun:stun.l.google.com:19302" } // free Google STUN server
 ];
 
-// Create a Socket.IO client connection
 export function createSocket(backendUrl: string): Socket {
   return io(backendUrl, {
-    transports: ['websocket'],
+    transports: ["websocket"], // helps avoid some polling issues
   });
 }
 
-// Create and return a new RTCPeerConnection
 export function createPeerConnection(
   remoteSocketId: string,
   socket: Socket,
@@ -25,22 +22,22 @@ export function createPeerConnection(
 ): RTCPeerConnection {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-  // Send ICE candidates to the remote peer
+  // Send ICE candidates to remote peer through signaling server
   pc.onicecandidate = (event) => {
     if (event.candidate) {
-      socket.emit('webrtc-ice-candidate', {
+      socket.emit("webrtc-ice-candidate", {
         to: remoteSocketId,
         candidate: event.candidate,
       });
     }
   };
 
-  // Add all local media tracks to the peer connection
+  // Add local media (camera + mic) tracks
   localStream.getTracks().forEach((track) => {
     pc.addTrack(track, localStream);
   });
 
-  // Store the connection
+  // Store this connection by the remote socket ID
   peers[remoteSocketId] = pc;
 
   return pc;
