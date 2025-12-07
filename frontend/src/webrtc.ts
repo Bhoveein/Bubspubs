@@ -1,17 +1,13 @@
 import { io, Socket } from "socket.io-client";
 
-export type PeerConnections = {
-  [socketId: string]: RTCPeerConnection;
-};
+export type PeerConnections = Record<string, RTCPeerConnection>;
 
 const ICE_SERVERS: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" } // free Google STUN server
+  { urls: "stun:stun.l.google.com:19302" }
 ];
 
 export function createSocket(backendUrl: string): Socket {
-  return io(backendUrl, {
-    transports: ["websocket"], // helps avoid some polling issues
-  });
+  return io(backendUrl, { transports: ["websocket"] });
 }
 
 export function createPeerConnection(
@@ -22,23 +18,19 @@ export function createPeerConnection(
 ): RTCPeerConnection {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-  // Send ICE candidates to remote peer through signaling server
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       socket.emit("webrtc-ice-candidate", {
         to: remoteSocketId,
-        candidate: event.candidate,
+        candidate: event.candidate
       });
     }
   };
 
-  // Add local media (camera + mic) tracks
-  localStream.getTracks().forEach((track) => {
+  for (const track of localStream.getTracks()) {
     pc.addTrack(track, localStream);
-  });
+  }
 
-  // Store this connection by the remote socket ID
   peers[remoteSocketId] = pc;
-
   return pc;
 }
