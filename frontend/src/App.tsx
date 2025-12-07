@@ -4,7 +4,7 @@ import { createSocket, createPeerConnection, PeerConnections } from "./webrtc";
 
 // 👇 change this to your Render URL when deployed
 // e.g. "https://bubspubs-backend.onrender.com"
-const BACKEND_URL = "http://localhost:4000";
+const BACKEND_URL = "https://bubspubs-backend.onrender.com";
 
 type RemoteVideo = {
   socketId: string;
