@@ -2,9 +2,10 @@ import React, { useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { createSocket, createPeerConnection, PeerConnections } from "./webrtc";
 
-// 🔴 IMPORTANT: change this to your Render URL when deployed
+// 🔴 IMPORTANT: change this to your real Render URL
 // e.g. "https://bubspubs-backend.onrender.com"
 const BACKEND_URL = "https://bubspubs-backend.onrender.com";
+
 
 type RemoteVideo = {
   socketId: string;
@@ -220,16 +221,20 @@ const App: React.FC = () => {
 
   const toggleMic = () => {
     if (!localStream) return;
-    localStream.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
-    setMicOn((v) => !v);
+    setMicOn((prev) => {
+      const newVal = !prev;
+      localStream.getAudioTracks().forEach((t) => (t.enabled = newVal));
+      return newVal;
+    });
   };
 
   const toggleCam = () => {
     if (!localStream) return;
-    localStream.getVideoTracks().forEach((t) => (t.enabled = !t.enabled));
-    setCamOn((v) => !v);
-    // When camera off, we just disable track; video bubble stays but shows overlay text
-    localStream.getVideoTracks().forEach((t) => (t.enabled = !camOn));
+    setCamOn((prev) => {
+      const newVal = !prev;
+      localStream.getVideoTracks().forEach((t) => (t.enabled = newVal));
+      return newVal;
+    });
   };
 
   const hangUp = () => {
@@ -354,3 +359,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+
