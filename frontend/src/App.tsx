@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { createSocket, createPeerConnection, PeerConnections } from "./webrtc";
 
-// 👇 change this to your Render URL when deployed
+// 🔴 IMPORTANT: change this to your Render URL when deployed
 // e.g. "https://bubspubs-backend.onrender.com"
-const BACKEND_URL = "https://bubspubs-backend.onrender.com";
+const BACKEND_URL = "https://YOUR-RENDER-URL-HERE";
 
 type RemoteVideo = {
   socketId: string;
@@ -26,12 +26,12 @@ const App: React.FC = () => {
 
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   // create socket once
   useEffect(() => {
     const s = createSocket(BACKEND_URL);
     setSocket(s);
-
     return () => {
       s.disconnect();
     };
@@ -41,9 +41,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!socket) return;
 
-    // existing user hears about new user
     socket.on("user-joined", async ({ socketId }) => {
       if (!localStream) return;
+      setStatusMsg("New user joined, creating WebRTC offer…");
+
       const pc = createPeerConnection(
         socketId,
         socket,
@@ -61,9 +62,9 @@ const App: React.FC = () => {
       socket.emit("webrtc-offer", { to: socketId, offer });
     });
 
-    // new user receives offer
     socket.on("webrtc-offer", async ({ from, offer }) => {
       if (!localStream) return;
+      setStatusMsg("Received offer, sending answer…");
 
       const pc = createPeerConnection(
         from,
@@ -79,7 +80,6 @@ const App: React.FC = () => {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-
       socket.emit("webrtc-answer", { to: from, answer });
     });
 
@@ -87,6 +87,7 @@ const App: React.FC = () => {
       const pc = peersRef.current[from];
       if (!pc) return;
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      setStatusMsg("Connected to remote peer ✅");
     });
 
     socket.on("webrtc-ice-candidate", async ({ from, candidate }) => {
@@ -105,16 +106,14 @@ const App: React.FC = () => {
         pc.close();
         delete peersRef.current[socketId];
       }
-      setRemoteVideos((prev) =>
-        prev.filter((v) => v.socketId !== socketId)
-      );
+      setRemoteVideos((prev) => prev.filter((v) => v.socketId !== socketId));
+      setStatusMsg("A user left the room.");
     });
 
     // movie sync
     socket.on("video-control", ({ type, time }) => {
       const movie = movieVideoRef.current;
       if (!movie) return;
-
       if (typeof time === "number") movie.currentTime = time;
       if (type === "PLAY") movie.play();
       if (type === "PAUSE") movie.pause();
@@ -123,7 +122,6 @@ const App: React.FC = () => {
     socket.on("video-state", ({ type, time }) => {
       const movie = movieVideoRef.current;
       if (!movie) return;
-
       if (typeof time === "number") movie.currentTime = time;
       if (type === "PLAY") movie.play();
       if (type === "PAUSE") movie.pause();
@@ -152,24 +150,40 @@ const App: React.FC = () => {
     });
   }
 
+  const createRoom = () => {
+    const id = Math.random().toString(36).substring(2, 8);
+    setRoomId(id);
+    setStatusMsg(`Room created: ${id}. Share this code.`);
+  };
+
   const handleJoin = async () => {
-    if (!socket || !roomId.trim()) return;
-
-    // camera / mic
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true
-    });
-    setLocalStream(stream);
-
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = stream;
-      localVideoRef.current.muted = true;
-      await localVideoRef.current.play().catch(() => {});
+    if (!socket || !roomId.trim()) {
+      setStatusMsg("Enter a room ID or create one first.");
+      return;
     }
 
-    socket.emit("join-room", { roomId: roomId.trim() });
-    setJoinedRoom(true);
+    try {
+      setStatusMsg("Requesting camera & microphone…");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
+      });
+
+      setLocalStream(stream);
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        localVideoRef.current.muted = true; // avoids echo
+        await localVideoRef.current.play().catch(() => {});
+      }
+
+      socket.emit("join-room", { roomId: roomId.trim() });
+      setJoinedRoom(true);
+      setStatusMsg(`Joined room "${roomId.trim()}". Waiting for others…`);
+    } catch (err) {
+      console.error("getUserMedia error", err);
+      setStatusMsg("Could not access camera/mic. Check permissions.");
+    }
   };
 
   const handleMovieFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -178,6 +192,7 @@ const App: React.FC = () => {
 
     const url = URL.createObjectURL(file);
     movieVideoRef.current.src = url;
+    setStatusMsg("Movie loaded. Press Play to sync.");
   };
 
   const sendVideoControl = (type: "PLAY" | "PAUSE") => {
@@ -213,6 +228,8 @@ const App: React.FC = () => {
     if (!localStream) return;
     localStream.getVideoTracks().forEach((t) => (t.enabled = !t.enabled));
     setCamOn((v) => !v);
+    // When camera off, we just disable track; video bubble stays but shows overlay text
+    localStream.getVideoTracks().forEach((t) => (t.enabled = !camOn));
   };
 
   const hangUp = () => {
@@ -221,83 +238,117 @@ const App: React.FC = () => {
     peersRef.current = {};
     setRemoteVideos([]);
     setJoinedRoom(false);
+    setLocalStream(null);
+    setStatusMsg("You left the call.");
   };
 
   return (
-    <div className="app-root">
-      {/* main movie area */}
-      <video
-        ref={movieVideoRef}
-        className="movie"
-        playsInline
-      />
-
-      {/* overlay gradient */}
-      <div className="top-bar">
+    <div className="app">
+      <header className="app-header">
         <div className="brand">BubsPubs</div>
-        <div className="room-controls">
+        <div className="room-box">
+          <button onClick={createRoom} className="secondary">
+            Create Room
+          </button>
           <input
             value={roomId}
             onChange={(e) => setRoomId(e.target.value)}
-            placeholder="Room name"
+            placeholder="Room ID"
           />
           <button onClick={handleJoin} disabled={joinedRoom}>
             {joinedRoom ? "Joined" : "Join"}
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* file picker */}
-      <div className="file-picker">
-        <label className="file-label">
-          Choose movie
-          <input type="file" accept="video/*" onChange={handleMovieFile} />
-        </label>
-      </div>
+      {statusMsg && <div className="status-bar">{statusMsg}</div>}
 
-      {/* top self bubble */}
-      {localStream && (
-        <div className="bubble top-left">
-          <video
-            ref={localVideoRef}
-            autoPlay
-            playsInline
-          />
-          <div className="bubble-name">You</div>
-          {!camOn && <div className="camera-off">Camera off</div>}
-        </div>
-      )}
+      <main className="main-layout">
+        {/* Movie area */}
+        <section className="movie-section">
+          <h2>Shared Movie</h2>
+          <label className="file-label">
+            Choose video file
+            <input type="file" accept="video/*" onChange={handleMovieFile} />
+          </label>
 
-      {/* bottom remote bubbles */}
-      <div className="bottom-bubbles">
-        {remoteVideos.map((rv, index) => (
-          <div key={rv.socketId} className="bubble">
+          <div className="movie-wrapper">
             <video
-              autoPlay
+              ref={movieVideoRef}
+              className="movie-video"
               playsInline
-              ref={(el) => {
-                if (el && rv.stream && el.srcObject !== rv.stream) {
-                  el.srcObject = rv.stream;
-                }
-              }}
             />
-            <div className="bubble-name">
-              Friend {index + 1}
-            </div>
           </div>
-        ))}
-      </div>
 
-      {/* controls */}
-      <div className="controls">
-        <button onClick={toggleMic}>{micOn ? "🔊" : "🔇"}</button>
-        <button onClick={toggleCam}>{camOn ? "📷" : "🚫"}</button>
-        <button onClick={onPlayClick}>▶</button>
-        <button onClick={onPauseClick}>⏸</button>
-        <button className="end" onClick={hangUp}>
-          ✕
-        </button>
-      </div>
+          <div className="movie-controls">
+            <button onClick={onPlayClick}>▶ Play (sync)</button>
+            <button onClick={onPauseClick}>⏸ Pause (sync)</button>
+          </div>
+        </section>
+
+        {/* Call area */}
+        <section className="call-section">
+          <h2>Video Call</h2>
+          <div className="call-grid">
+            <div className="call-tile you">
+              {localStream ? (
+                <>
+                  <video
+                    ref={localVideoRef}
+                    autoPlay
+                    playsInline
+                    className="call-video"
+                  />
+                  <span className="call-name">You</span>
+                  {!camOn && (
+                    <div className="overlay-text">Camera off</div>
+                  )}
+                </>
+              ) : (
+                <div className="placeholder">
+                  {joinedRoom
+                    ? "Waiting for camera permission…"
+                    : "Join a room to start your camera."}
+                </div>
+              )}
+            </div>
+
+            {remoteVideos.map((rv) => (
+              <div key={rv.socketId} className="call-tile">
+                {rv.stream ? (
+                  <>
+                    <video
+                      autoPlay
+                      playsInline
+                      className="call-video"
+                      ref={(el) => {
+                        if (el && rv.stream && el.srcObject !== rv.stream) {
+                          el.srcObject = rv.stream;
+                        }
+                      }}
+                    />
+                    <span className="call-name">
+                      {rv.socketId.slice(0, 6)}
+                    </span>
+                  </>
+                ) : (
+                  <div className="placeholder">Connecting…</div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="call-controls">
+            <button onClick={toggleMic}>{micOn ? "Mute" : "Unmute"}</button>
+            <button onClick={toggleCam}>
+              {camOn ? "Camera Off" : "Camera On"}
+            </button>
+            <button className="end" onClick={hangUp}>
+              Hang Up
+            </button>
+          </div>
+        </section>
+      </main>
     </div>
   );
 };
