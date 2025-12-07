@@ -6,19 +6,25 @@ import cors from "cors";
 const app = express();
 app.use(cors());
 
+// Simple test route so we can see if the server is running
+app.get("/", (req, res) => {
+  res.send("BubsPubs signaling server is running");
+});
+
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+  },
 });
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
   socket.on("join-room", ({ roomId }) => {
+    console.log(`Socket ${socket.id} joining room ${roomId}`);
     socket.join(roomId);
     socket.to(roomId).emit("user-joined", { socketId: socket.id });
   });

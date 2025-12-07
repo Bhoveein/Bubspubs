@@ -2,10 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { createSocket, createPeerConnection, PeerConnections } from "./webrtc";
 
-// 🔴 IMPORTANT: change this to your real Render URL
-// e.g. "https://bubspubs-backend.onrender.com"
+// 🔴 IMPORTANT: your Render backend URL
 const BACKEND_URL = "https://bubspubs-backend.onrender.com";
-
 
 type RemoteVideo = {
   socketId: string;
@@ -28,6 +26,24 @@ const App: React.FC = () => {
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  // 👇 EVERY time we get a localStream, attach it to the <video>
+  useEffect(() => {
+    if (!localStream || !localVideoRef.current) return;
+
+    const videoEl = localVideoRef.current;
+    videoEl.srcObject = localStream;
+    videoEl.muted = true;
+
+    (async () => {
+      try {
+        await videoEl.play();
+        console.log("Local video is playing");
+      } catch (err) {
+        console.warn("Video play() was blocked:", err);
+      }
+    })();
+  }, [localStream]);
 
   // create socket once
   useEffect(() => {
@@ -111,7 +127,6 @@ const App: React.FC = () => {
       setStatusMsg("A user left the room.");
     });
 
-    // movie sync
     socket.on("video-control", ({ type, time }) => {
       const movie = movieVideoRef.current;
       if (!movie) return;
@@ -167,16 +182,11 @@ const App: React.FC = () => {
       setStatusMsg("Requesting camera & microphone…");
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
-        audio: true
+        audio: true,
       });
 
-      setLocalStream(stream);
-
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-        localVideoRef.current.muted = true; // avoids echo
-        await localVideoRef.current.play().catch(() => {});
-      }
+      console.log("Got local stream:", stream);
+      setLocalStream(stream); // effect above will attach it to <video>
 
       socket.emit("join-room", { roomId: roomId.trim() });
       setJoinedRoom(true);
@@ -201,7 +211,7 @@ const App: React.FC = () => {
     socket.emit("video-control", {
       roomId,
       type,
-      time: movieVideoRef.current.currentTime
+      time: movieVideoRef.current.currentTime,
     });
   };
 
