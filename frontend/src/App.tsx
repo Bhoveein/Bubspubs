@@ -1,24 +1,33 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { createSocket, createPeerConnection, PeerConnections } from './webrtc';
-import type { Socket } from 'socket.io-client';
+import React, { useEffect, useRef, useState } from "react";
+import type { Socket } from "socket.io-client";
+import { createSocket, createPeerConnection, PeerConnections } from "./webrtc";
 
-// TODO: change to your deployed backend URL later
-const BACKEND_URL = 'http://192.168.1.158:4000';
+// 👇 change this to your Render URL when deployed
+// e.g. "https://bubspubs-backend.onrender.com"
+const BACKEND_URL = "http://localhost:4000";
+
+type RemoteVideo = {
+  socketId: string;
+  stream: MediaStream | null;
+};
 
 const App: React.FC = () => {
-  const [roomId, setRoomId] = useState('');
-  const [connectedRoom, setConnectedRoom] = useState<string | null>(null);
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [roomId, setRoomId] = useState("");
+  const [joinedRoom, setJoinedRoom] = useState(false);
 
+  const [socket, setSocket] = useState<Socket | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteVideos, setRemoteVideos] = useState<RemoteVideo[]>([]);
+
   const peersRef = useRef<PeerConnections>({});
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteVideosRef = useRef<{ [id: string]: HTMLVideoElement | null }>({});
+  const movieVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  const videoPlayerRef = useRef<HTMLVideoElement | null>(null);
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(true);
 
-  // Init socket once
+  // create socket once
   useEffect(() => {
     const s = createSocket(BACKEND_URL);
     setSocket(s);
@@ -28,14 +37,19 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Set up socket listeners
+  // socket listeners
   useEffect(() => {
     if (!socket) return;
 
-    // Another user joined → we create an offer
-    socket.on('user-joined', async ({ socketId }) => {
+    // existing user hears about new user
+    socket.on("user-joined", async ({ socketId }) => {
       if (!localStream) return;
-      const pc = createPeerConnection(socketId, socket, localStream, peersRef.current);
+      const pc = createPeerConnection(
+        socketId,
+        socket,
+        localStream,
+        peersRef.current
+      );
 
       pc.ontrack = (event) => {
         attachRemoteStream(socketId, event.streams[0]);
@@ -44,12 +58,19 @@ const App: React.FC = () => {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      socket.emit('webrtc-offer', { to: socketId, offer });
+      socket.emit("webrtc-offer", { to: socketId, offer });
     });
 
-    socket.on('webrtc-offer', async ({ from, offer }) => {
+    // new user receives offer
+    socket.on("webrtc-offer", async ({ from, offer }) => {
       if (!localStream) return;
-      const pc = createPeerConnection(from, socket, localStream, peersRef.current);
+
+      const pc = createPeerConnection(
+        from,
+        socket,
+        localStream,
+        peersRef.current
+      );
 
       pc.ontrack = (event) => {
         attachRemoteStream(from, event.streams[0]);
@@ -59,87 +80,82 @@ const App: React.FC = () => {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      socket.emit('webrtc-answer', { to: from, answer });
+      socket.emit("webrtc-answer", { to: from, answer });
     });
 
-    socket.on('webrtc-answer', async ({ from, answer }) => {
+    socket.on("webrtc-answer", async ({ from, answer }) => {
       const pc = peersRef.current[from];
       if (!pc) return;
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
-    socket.on('webrtc-ice-candidate', async ({ from, candidate }) => {
+    socket.on("webrtc-ice-candidate", async ({ from, candidate }) => {
       const pc = peersRef.current[from];
       if (!pc) return;
       try {
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (err) {
-        console.error('Error adding ICE candidate', err);
+        console.error("Error adding ICE candidate", err);
       }
     });
 
-    socket.on('user-left', ({ socketId }) => {
+    socket.on("user-left", ({ socketId }) => {
       const pc = peersRef.current[socketId];
       if (pc) {
         pc.close();
         delete peersRef.current[socketId];
       }
-      const videoEl = remoteVideosRef.current[socketId];
-      if (videoEl) {
-        videoEl.srcObject = null;
-      }
+      setRemoteVideos((prev) =>
+        prev.filter((v) => v.socketId !== socketId)
+      );
     });
 
-    // Sync video controls
-    socket.on('video-control', ({ type, time }) => {
-      const videoEl = videoPlayerRef.current;
-      if (!videoEl) return;
+    // movie sync
+    socket.on("video-control", ({ type, time }) => {
+      const movie = movieVideoRef.current;
+      if (!movie) return;
 
-      if (typeof time === 'number') {
-        videoEl.currentTime = time;
-      }
-
-      if (type === 'PLAY') {
-        videoEl.play();
-      } else if (type === 'PAUSE') {
-        videoEl.pause();
-      }
+      if (typeof time === "number") movie.currentTime = time;
+      if (type === "PLAY") movie.play();
+      if (type === "PAUSE") movie.pause();
     });
 
-    socket.on('video-state', ({ type, time }) => {
-      const videoEl = videoPlayerRef.current;
-      if (!videoEl) return;
-      if (typeof time === 'number') {
-        videoEl.currentTime = time;
-      }
-      if (type === 'PLAY') {
-        videoEl.play();
-      } else if (type === 'PAUSE') {
-        videoEl.pause();
-      }
+    socket.on("video-state", ({ type, time }) => {
+      const movie = movieVideoRef.current;
+      if (!movie) return;
+
+      if (typeof time === "number") movie.currentTime = time;
+      if (type === "PLAY") movie.play();
+      if (type === "PAUSE") movie.pause();
     });
 
     return () => {
-      socket.off('user-joined');
-      socket.off('webrtc-offer');
-      socket.off('webrtc-answer');
-      socket.off('webrtc-ice-candidate');
-      socket.off('user-left');
-      socket.off('video-control');
-      socket.off('video-state');
+      socket.off("user-joined");
+      socket.off("webrtc-offer");
+      socket.off("webrtc-answer");
+      socket.off("webrtc-ice-candidate");
+      socket.off("user-left");
+      socket.off("video-control");
+      socket.off("video-state");
     };
   }, [socket, localStream]);
 
   function attachRemoteStream(socketId: string, stream: MediaStream) {
-    let videoEl = remoteVideosRef.current[socketId];
-    if (!videoEl) return;
-    videoEl.srcObject = stream;
+    setRemoteVideos((prev) => {
+      const existing = prev.find((v) => v.socketId === socketId);
+      if (existing) {
+        return prev.map((v) =>
+          v.socketId === socketId ? { ...v, stream } : v
+        );
+      }
+      return [...prev, { socketId, stream }];
+    });
   }
 
-  const handleJoinRoom = async () => {
-    if (!socket || !roomId) return;
+  const handleJoin = async () => {
+    if (!socket || !roomId.trim()) return;
 
-    // Get camera & mic
+    // camera / mic
     const stream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: true
@@ -148,111 +164,139 @@ const App: React.FC = () => {
 
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = stream;
-      localVideoRef.current.muted = true; // don't echo yourself
+      localVideoRef.current.muted = true;
       await localVideoRef.current.play().catch(() => {});
     }
 
-    socket.emit('join-room', { roomId });
-    setConnectedRoom(roomId);
+    socket.emit("join-room", { roomId: roomId.trim() });
+    setJoinedRoom(true);
   };
 
-  const handleVideoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMovieFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !videoPlayerRef.current) return;
+    if (!file || !movieVideoRef.current) return;
+
     const url = URL.createObjectURL(file);
-    videoPlayerRef.current.src = url;
+    movieVideoRef.current.src = url;
   };
 
-  const sendVideoControl = (type: 'PLAY' | 'PAUSE') => {
-    if (!socket || !connectedRoom || !videoPlayerRef.current) return;
-    const time = videoPlayerRef.current.currentTime;
-    socket.emit('video-control', {
-      roomId: connectedRoom,
+  const sendVideoControl = (type: "PLAY" | "PAUSE") => {
+    if (!socket || !joinedRoom || !movieVideoRef.current) return;
+    socket.emit("video-control", {
+      roomId,
       type,
-      time
+      time: movieVideoRef.current.currentTime
     });
   };
 
   const onPlayClick = () => {
-    const videoEl = videoPlayerRef.current;
-    if (!videoEl) return;
-    videoEl.play();
-    sendVideoControl('PLAY');
+    const movie = movieVideoRef.current;
+    if (!movie) return;
+    movie.play();
+    sendVideoControl("PLAY");
   };
 
   const onPauseClick = () => {
-    const videoEl = videoPlayerRef.current;
-    if (!videoEl) return;
-    videoEl.pause();
-    sendVideoControl('PAUSE');
+    const movie = movieVideoRef.current;
+    if (!movie) return;
+    movie.pause();
+    sendVideoControl("PAUSE");
+  };
+
+  const toggleMic = () => {
+    if (!localStream) return;
+    localStream.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
+    setMicOn((v) => !v);
+  };
+
+  const toggleCam = () => {
+    if (!localStream) return;
+    localStream.getVideoTracks().forEach((t) => (t.enabled = !t.enabled));
+    setCamOn((v) => !v);
+  };
+
+  const hangUp = () => {
+    localStream?.getTracks().forEach((t) => t.stop());
+    Object.values(peersRef.current).forEach((pc) => pc.close());
+    peersRef.current = {};
+    setRemoteVideos([]);
+    setJoinedRoom(false);
   };
 
   return (
-    <div style={{ padding: '1rem', fontFamily: 'sans-serif' }}>
-      <h1>🎬 Watch Together + Video Call</h1>
+    <div className="app-root">
+      {/* main movie area */}
+      <video
+        ref={movieVideoRef}
+        className="movie"
+        playsInline
+      />
 
-      {!connectedRoom && (
-        <div style={{ marginBottom: '1rem' }}>
+      {/* overlay gradient */}
+      <div className="top-bar">
+        <div className="brand">BubsPubs</div>
+        <div className="room-controls">
           <input
-            placeholder="Room ID (e.g. my-room)"
             value={roomId}
             onChange={(e) => setRoomId(e.target.value)}
-            style={{ padding: '0.5rem', marginRight: '0.5rem' }}
+            placeholder="Room name"
           />
-          <button onClick={handleJoinRoom} style={{ padding: '0.5rem 1rem' }}>
-            Join room
+          <button onClick={handleJoin} disabled={joinedRoom}>
+            {joinedRoom ? "Joined" : "Join"}
           </button>
-        </div>
-      )}
-
-      {connectedRoom && <p>Joined room: <b>{connectedRoom}</b></p>}
-
-      {/* Video player */}
-      <div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
-        <h2>Movie</h2>
-        <input type="file" accept="video/*" onChange={handleVideoFileChange} />
-        <div>
-          <video
-            ref={videoPlayerRef}
-            controls
-            style={{ width: '100%', maxWidth: '640px', display: 'block', marginTop: '0.5rem' }}
-          />
-        </div>
-        <div style={{ marginTop: '0.5rem' }}>
-          <button onClick={onPlayClick} style={{ marginRight: '0.5rem' }}>
-            ▶ Play (sync)
-          </button>
-          <button onClick={onPauseClick}>⏸ Pause (sync)</button>
         </div>
       </div>
 
-      {/* Video call */}
-      <div>
-        <h2>Video Call</h2>
-        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-          <div>
-            <p>You</p>
+      {/* file picker */}
+      <div className="file-picker">
+        <label className="file-label">
+          Choose movie
+          <input type="file" accept="video/*" onChange={handleMovieFile} />
+        </label>
+      </div>
+
+      {/* top self bubble */}
+      {localStream && (
+        <div className="bubble top-left">
+          <video
+            ref={localVideoRef}
+            autoPlay
+            playsInline
+          />
+          <div className="bubble-name">You</div>
+          {!camOn && <div className="camera-off">Camera off</div>}
+        </div>
+      )}
+
+      {/* bottom remote bubbles */}
+      <div className="bottom-bubbles">
+        {remoteVideos.map((rv, index) => (
+          <div key={rv.socketId} className="bubble">
             <video
-              ref={localVideoRef}
               autoPlay
               playsInline
-              style={{ width: '200px', height: '150px', background: '#000' }}
+              ref={(el) => {
+                if (el && rv.stream && el.srcObject !== rv.stream) {
+                  el.srcObject = rv.stream;
+                }
+              }}
             />
-          </div>
-
-          {/* Placeholder for up to 3 remote users for demo */}
-          {['remote1', 'remote2', 'remote3'].map((id) => (
-            <div key={id}>
-              <p>Remote ({id})</p>
-              <video
-                ref={(el) => (remoteVideosRef.current[id] = el)}
-                autoPlay
-                playsInline
-                style={{ width: '200px', height: '150px', background: '#000' }}
-              />
+            <div className="bubble-name">
+              Friend {index + 1}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
+      </div>
+
+      {/* controls */}
+      <div className="controls">
+        <button onClick={toggleMic}>{micOn ? "🔊" : "🔇"}</button>
+        <button onClick={toggleCam}>{camOn ? "📷" : "🚫"}</button>
+        <button onClick={onPlayClick}>▶</button>
+        <button onClick={onPauseClick}>⏸</button>
+        <button className="end" onClick={hangUp}>
+          ✕
+        </button>
       </div>
     </div>
   );
